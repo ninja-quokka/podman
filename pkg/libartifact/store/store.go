@@ -30,9 +30,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-var (
-	ErrEmptyArtifactName = errors.New("artifact name cannot be empty")
-)
+var ErrEmptyArtifactName = errors.New("artifact name cannot be empty")
 
 const ManifestSchemaVersion = 2
 
@@ -251,6 +249,7 @@ func (as ArtifactStore) Add(ctx context.Context, dest string, paths []string, op
 	// ImageDestination, in general, requires the caller to write a full image; here we may write only the added layers.
 	// This works for the oci/layout transport we hard-code.
 	for _, path := range paths {
+		logrus.Debugf("path is %s", path)
 		// get the new artifact into the local store
 		newBlobDigest, newBlobSize, err := layout.PutBlobFromLocalFile(ctx, imageDest, path)
 		if err != nil {
@@ -572,9 +571,7 @@ func (as ArtifactStore) indexPath() string {
 // getArtifacts returns an ArtifactList based on the artifact's store.  The return error and
 // unused opts is meant for future growth like filters, etc so the API does not change.
 func (as ArtifactStore) getArtifacts(ctx context.Context, _ *libartTypes.GetArtifactOptions) (libartifact.ArtifactList, error) {
-	var (
-		al libartifact.ArtifactList
-	)
+	var al libartifact.ArtifactList
 
 	lrs, err := layout.List(as.storePath)
 	if err != nil {
