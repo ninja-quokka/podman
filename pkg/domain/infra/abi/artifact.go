@@ -4,6 +4,7 @@ package abi
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"time"
 
@@ -58,7 +59,7 @@ func (ir *ImageEngine) ArtifactPull(ctx context.Context, name string, opts entit
 	pullOptions.CertDirPath = opts.CertDirPath
 	pullOptions.Username = opts.Username
 	pullOptions.Password = opts.Password
-	pullOptions.SignaturePolicyPath = opts.SignaturePolicyPath
+	pullOptions.SignaturePolicyPath = opts.SignaturePolicyPath // NOTE: this is not configurabl on the cli?
 	pullOptions.InsecureSkipTLSVerify = opts.InsecureSkipTLSVerify
 	pullOptions.Writer = opts.Writer
 	pullOptions.OciDecryptConfig = opts.OciDecryptConfig
@@ -66,6 +67,7 @@ func (ir *ImageEngine) ArtifactPull(ctx context.Context, name string, opts entit
 	if opts.RetryDelay != "" {
 		duration, err := time.ParseDuration(opts.RetryDelay)
 		if err != nil {
+			fmt.Errorf("unable to parse value provided %q as --retry-delay: %w", opts.RetryDelay, err)
 			return nil, err
 		}
 		pullOptions.RetryDelay = &duration
@@ -82,9 +84,7 @@ func (ir *ImageEngine) ArtifactPull(ctx context.Context, name string, opts entit
 }
 
 func (ir *ImageEngine) ArtifactRm(ctx context.Context, name string, opts entities.ArtifactRemoveOptions) (*entities.ArtifactRemoveReport, error) {
-	var (
-		namesOrDigests []string
-	)
+	var namesOrDigests []string
 	artStore, err := ir.Libpod.ArtifactStore()
 	if err != nil {
 		return nil, err
@@ -182,6 +182,7 @@ func (ir *ImageEngine) ArtifactPush(ctx context.Context, name string, opts entit
 	err = artStore.Push(ctx, name, name, copyOpts)
 	return &entities.ArtifactPushReport{}, err
 }
+
 func (ir *ImageEngine) ArtifactAdd(ctx context.Context, name string, paths []string, opts *entities.ArtifactAddOptions) (*entities.ArtifactAddReport, error) {
 	artStore, err := ir.Libpod.ArtifactStore()
 	if err != nil {
