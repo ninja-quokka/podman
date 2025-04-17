@@ -33,9 +33,7 @@ type artifactAddOptions struct {
 	FileType     string
 }
 
-var (
-	addOpts artifactAddOptions
-)
+var addOpts artifactAddOptions
 
 func init() {
 	registry.Commands = append(registry.Commands, registry.CliCommand{

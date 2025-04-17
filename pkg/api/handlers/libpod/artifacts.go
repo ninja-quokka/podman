@@ -3,15 +3,18 @@ package libpod
 import (
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"github.com/containers/image/v5/types"
 	"github.com/containers/podman/v5/libpod"
 	"github.com/containers/podman/v5/pkg/api/handlers/utils"
+	"github.com/sirupsen/logrus"
 
 	domain_utils "github.com/containers/podman/v5/pkg/domain/utils"
 
+	"github.com/containers/podman/v5/pkg/api/handlers/compat"
 	api "github.com/containers/podman/v5/pkg/api/types"
 	"github.com/containers/podman/v5/pkg/auth"
 	"github.com/containers/podman/v5/pkg/domain/entities"
@@ -119,7 +122,7 @@ func AddArtifact(w http.ResponseWriter, r *http.Request) {
 	decoder := r.Context().Value(api.DecoderKey).(*schema.Decoder)
 	query := struct {
 		Name        string   `schema:"name, required"`
-		File        []string `schema:"file, required"`
+		File        string `schema:"file, required"`
 		Annotations []string `schema:"annotations"`
 		Type        string   `schema:"type"`
 		Append      bool     `schema:"append"`
@@ -149,10 +152,36 @@ func AddArtifact(w http.ResponseWriter, r *http.Request) {
 		ArtifactType: query.Type,
 	}
 
-	io.Reader
-	r.Body.Read()
+	// Write file to temparay directory
+	// TODO: (Lewis) Avoid writing to disk by updating the AddArtifact and subsequent functions to accept an io.reader
+	// and pass the http r.body rather than a string of paths
+	tmpDir, err := os.MkdirTemp("", "artifactAdd")
+	if err != nil {
+		utils.Error(w, http.StatusInternalServerError, fmt.Errorf("failed to create tempdir: %w", err))
+		return
+	}
+	defer func() {
+		err := os.RemoveAll(tmpDir)
+		if err != nil {
+			logrus.Errorf("Failed to remove temporary directory: %v.", err)
+		}
+	}()
+
+    f, err := os.Create(filepath.Join(tmpDir,query.File))
+	if err != nil{
+		utils.Error(w, http.StatusInternalServerError, fmt.Errorf("failed to create temporary file: %w", err))
+		return
+	}
+
+	if err := compat.SaveFromBody(f, r); err != nil {
+		utils.Error(w, http.StatusInternalServerError, fmt.Errorf("failed to write temporary file: %w", err))
+		return
+	}
+
+	path := []string{f.Name()}
+
 	imageEngine := abi.ImageEngine{Libpod: runtime}
-	artifacts, err := imageEngine.ArtifactAdd(r.Context(), query.Name, query.File, artifactAddOptions)
+	artifacts, err := imageEngine.ArtifactAdd(r.Context(), query.Name, path, artifactAddOptions)
 	if err != nil {
 		utils.InternalServerError(w, err)
 		return
