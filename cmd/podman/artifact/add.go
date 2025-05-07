@@ -11,20 +11,18 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	addCmd = &cobra.Command{
-		Use:               "add [options] ARTIFACT PATH [...PATH]",
-		Short:             "Add an OCI artifact to the local store",
-		Long:              "Add an OCI artifact to the local store from the local filesystem",
-		RunE:              add,
-		Args:              cobra.MinimumNArgs(2),
-		ValidArgsFunction: common.AutocompleteArtifactAdd,
-		Example: `podman artifact add quay.io/myimage/myartifact:latest /tmp/foobar.txt
+var addCmd = &cobra.Command{
+	Use:               "add [options] ARTIFACT PATH [...PATH]",
+	Short:             "Add an OCI artifact to the local store",
+	Long:              "Add an OCI artifact to the local store from the local filesystem",
+	RunE:              add,
+	Args:              cobra.MinimumNArgs(2),
+	ValidArgsFunction: common.AutocompleteArtifactAdd,
+	Example: `podman artifact add quay.io/myimage/myartifact:latest /tmp/foobar.txt
 podman artifact add --file-type text/yaml quay.io/myimage/myartifact:latest /tmp/foobar.yaml
 podman artifact add --append quay.io/myimage/myartifact:latest /tmp/foobar.tar.gz`,
-		Annotations: map[string]string{registry.EngineMode: registry.ABIMode},
-	}
-)
+	Annotations: map[string]string{registry.EngineMode: registry.ABIMode},
+}
 
 type artifactAddOptions struct {
 	ArtifactType string
@@ -59,6 +57,8 @@ func init() {
 }
 
 func add(cmd *cobra.Command, args []string) error {
+	artifactName := args[0]
+	blobs := args[1:]
 	opts := new(entities.ArtifactAddOptions)
 
 	annots, err := utils.ParseAnnotations(addOpts.Annotations)
@@ -70,7 +70,9 @@ func add(cmd *cobra.Command, args []string) error {
 	opts.Append = addOpts.Append
 	opts.FileType = addOpts.FileType
 
-	report, err := registry.ImageEngine().ArtifactAdd(registry.Context(), args[0], args[1:], opts)
+	artifactBlobs, err := utils.ParseBlobs(blobs)
+
+	report, err := registry.ImageEngine().ArtifactAdd(registry.Context(), artifactName, artifactBlobs, opts)
 	if err != nil {
 		return err
 	}

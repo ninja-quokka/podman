@@ -3,8 +3,11 @@ package utils
 import (
 	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/containers/podman/v5/pkg/domain/entities"
 	jsoniter "github.com/json-iterator/go"
 )
 
@@ -53,4 +56,27 @@ func ParseAnnotations(options []string) (map[string]string, error) {
 		annotations[key] = val
 	}
 	return annotations, nil
+}
+
+// ParseBlobs takes a string slice of paths to blobs, validates them and
+// returns a list of ArtifactBlobs which contain the io.Reader of the blob
+// and the filename.
+// WARNING: Files closing is not handled by this function
+func ParseBlobs(blobPaths []string) ([]entities.ArtifactBlob, error) {
+	artifactBlobs := make([]entities.ArtifactBlob, 0, len(blobPaths))
+
+	for _, blobPath := range blobPaths {
+		b, err := os.Open(blobPath)
+		if err != nil {
+			return nil, fmt.Errorf("error opening path %s: %w", blobPath, err)
+		}
+
+		artifactBlob := entities.ArtifactBlob{
+			Blob:     b,
+			Filename: filepath.Base(blobPath),
+		}
+		artifactBlobs = append(artifactBlobs, artifactBlob)
+	}
+
+	return artifactBlobs, nil
 }

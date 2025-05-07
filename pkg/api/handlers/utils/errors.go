@@ -13,9 +13,7 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-var (
-	ErrLinkNotSupport = errors.New("link is not supported")
-)
+var ErrLinkNotSupport = errors.New("link is not supported")
 
 // TODO: document the exported functions in this file and make them more
 // generic (e.g., not tied to one ctr/pod).
@@ -56,6 +54,10 @@ func ImageNotFound(w http.ResponseWriter, name string, err error) {
 		InternalServerError(w, err)
 		return
 	}
+	Error(w, http.StatusNotFound, err)
+}
+
+func ArtifactNotFound(w http.ResponseWriter, name string, err error) {
 	Error(w, http.StatusNotFound, err)
 }
 

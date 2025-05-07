@@ -33,6 +33,6 @@ func (ir *ImageEngine) ArtifactPush(ctx context.Context, name string, opts entit
 	return nil, fmt.Errorf("not implemented")
 }
 
-func (ir *ImageEngine) ArtifactAdd(ctx context.Context, name string, paths []string, opts *entities.ArtifactAddOptions) (*entities.ArtifactAddReport, error) {
+func (ir *ImageEngine) ArtifactAdd(ctx context.Context, name string, artifactBlob []entities.ArtifactBlob, opts *entities.ArtifactAddOptions) (*entities.ArtifactAddReport, error) {
 	return nil, fmt.Errorf("not implemented")
 }

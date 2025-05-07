@@ -3,6 +3,7 @@
 package abi
 
 import (
+	"archive/tar"
 	"context"
 	"fmt"
 	"os"
@@ -183,7 +184,7 @@ func (ir *ImageEngine) ArtifactPush(ctx context.Context, name string, opts entit
 	return &entities.ArtifactPushReport{}, err
 }
 
-func (ir *ImageEngine) ArtifactAdd(ctx context.Context, name string, paths []string, opts *entities.ArtifactAddOptions) (*entities.ArtifactAddReport, error) {
+func (ir *ImageEngine) ArtifactAdd(ctx context.Context, name string, artifactBlobs []entities.ArtifactBlob, opts *entities.ArtifactAddOptions) (*entities.ArtifactAddReport, error) {
 	artStore, err := ir.Libpod.ArtifactStore()
 	if err != nil {
 		return nil, err
@@ -196,7 +197,7 @@ func (ir *ImageEngine) ArtifactAdd(ctx context.Context, name string, paths []str
 		FileType:     opts.FileType,
 	}
 
-	artifactDigest, err := artStore.Add(ctx, name, paths, &addOptions)
+	artifactDigest, err := artStore.Add(ctx, name, artifactBlobs, &addOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -218,4 +219,19 @@ func (ir *ImageEngine) ArtifactExtract(ctx context.Context, name string, target 
 	}
 
 	return artStore.Extract(ctx, name, target, extractOpt)
+}
+
+func (ir *ImageEngine) ArtifactExtractTarStream(ctx context.Context, name string, target *tar.Writer, opts *entities.ArtifactExtractOptions) error {
+	artStore, err := ir.Libpod.ArtifactStore()
+	if err != nil {
+		return err
+	}
+	extractOpt := &types.ExtractOptions{
+		FilterBlobOptions: types.FilterBlobOptions{
+			Digest: opts.Digest,
+			Title:  opts.Title,
+		},
+	}
+
+	return artStore.ExtractTarStream(ctx, name, target, extractOpt)
 }

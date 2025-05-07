@@ -3,6 +3,7 @@
 package store
 
 import (
+	"archive/tar"
 	"context"
 	"encoding/json"
 	"errors"
@@ -19,8 +20,10 @@ import (
 	"github.com/containers/image/v5/image"
 	"github.com/containers/image/v5/manifest"
 	"github.com/containers/image/v5/oci/layout"
+	"github.com/containers/image/v5/pkg/blobinfocache/none"
 	"github.com/containers/image/v5/transports/alltransports"
 	"github.com/containers/image/v5/types"
+	"github.com/containers/podman/v5/pkg/domain/entities"
 	"github.com/containers/podman/v5/pkg/libartifact"
 	libartTypes "github.com/containers/podman/v5/pkg/libartifact/types"
 	"github.com/containers/storage/pkg/fileutils"
@@ -166,9 +169,9 @@ func (as ArtifactStore) Push(ctx context.Context, src, dest string, opts libimag
 	return copyer.Close()
 }
 
-// Add takes one or more local files and adds them to the local artifact store.  The empty
+// Add takes one or more artifact blobs and add them to the local artifact store.  The empty
 // string input is for possible custom artifact types.
-func (as ArtifactStore) Add(ctx context.Context, dest string, paths []string, options *libartTypes.AddOptions) (*digest.Digest, error) {
+func (as ArtifactStore) Add(ctx context.Context, dest string, artifactBlobs []entities.ArtifactBlob, options *libartTypes.AddOptions) (*digest.Digest, error) {
 	if len(dest) == 0 {
 		return nil, ErrEmptyArtifactName
 	}
@@ -227,8 +230,8 @@ func (as ArtifactStore) Add(ctx context.Context, dest string, paths []string, op
 		}
 	}
 
-	for _, path := range paths {
-		fileName := filepath.Base(path)
+	for _, artifact := range artifactBlobs {
+		fileName := artifact.Filename
 		if _, ok := fileNames[fileName]; ok {
 			return nil, fmt.Errorf("%s: %w", fileName, libartTypes.ErrArtifactFileExists)
 		}
@@ -248,11 +251,13 @@ func (as ArtifactStore) Add(ctx context.Context, dest string, paths []string, op
 
 	// ImageDestination, in general, requires the caller to write a full image; here we may write only the added layers.
 	// This works for the oci/layout transport we hard-code.
-	for _, path := range paths {
+	for _, artifact := range artifactBlobs {
 		mediaType := options.FileType
-		logrus.Debugf("path is %s", path)
 		// get the new artifact into the local store
-		newBlobDigest, newBlobSize, err := layout.PutBlobFromLocalFile(ctx, imageDest, path)
+		blobInfo := types.BlobInfo{
+			Size: -1,
+		}
+		blobInfo, err := imageDest.PutBlob(ctx, artifact.Blob, blobInfo, none.NoCache, false)
 		if err != nil {
 			return nil, err
 		}
@@ -260,18 +265,18 @@ func (as ArtifactStore) Add(ctx context.Context, dest string, paths []string, op
 		// If we did not receive an override for the layer's mediatype, use
 		// detection to determine it.
 		if len(mediaType) < 1 {
-			mediaType, err = determineManifestType(path)
+			mediaType, err = determineManifestType(artifact.Blob)
 			if err != nil {
 				return nil, err
 			}
 		}
 
 		annotations := maps.Clone(options.Annotations)
-		annotations[specV1.AnnotationTitle] = filepath.Base(path)
+		annotations[specV1.AnnotationTitle] = artifact.Filename
 		newLayer := specV1.Descriptor{
 			MediaType:   mediaType,
-			Digest:      newBlobDigest,
-			Size:        newBlobSize,
+			Digest:      blobInfo.Digest,
+			Size:        blobInfo.Size,
 			Annotations: annotations,
 		}
 		artifactManifest.Layers = append(artifactManifest.Layers, newLayer)
@@ -470,6 +475,45 @@ func (as ArtifactStore) Extract(ctx context.Context, nameOrDigest string, target
 	return nil
 }
 
+// Extract an artifact to tarstream
+func (as ArtifactStore) ExtractTarStream(ctx context.Context, nameOrDigest string, target *tar.Writer, options *libartTypes.ExtractOptions) error {
+	arty, imgSrc, err := getArtifactAndImageSource(ctx, as, nameOrDigest, &options.FilterBlobOptions)
+	if err != nil {
+		return err
+	}
+	defer imgSrc.Close()
+
+	if len(options.Digest) > 0 || len(options.Title) > 0 {
+		digest, err := findDigest(arty, &options.FilterBlobOptions)
+		if err != nil {
+			return err
+		}
+		// In case the digest is set we always use it as target name
+		// so we do not have to get the actual title annotation form the blob.
+		// Passing options.Title is enough because we know it is empty when digest
+		// is set as we only allow either one.
+		filename, err := generateArtifactBlobName(options.Title, digest)
+		if err != nil {
+			return err
+		}
+		return copyTrustedImageBlobToTarStream(ctx, imgSrc, digest, target, filename)
+	}
+
+	for _, l := range arty.Manifest.Layers {
+		title := l.Annotations[specV1.AnnotationTitle]
+		filename, err := generateArtifactBlobName(title, l.Digest)
+		if err != nil {
+			return err
+		}
+		err = copyTrustedImageBlobToTarStream(ctx, imgSrc, l.Digest, target, filename)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func generateArtifactBlobName(title string, digest digest.Digest) (string, error) {
 	filename := title
 	if len(filename) == 0 {
@@ -543,6 +587,47 @@ func copyTrustedImageBlobToFile(ctx context.Context, imgSrc types.ImageSource, d
 
 	_, err = io.Copy(dest, src)
 	return err
+}
+
+// copyTrustedImageBlobToStream copies blob identified by digest in imgSrc to io.writer target.
+//
+// WARNING: This does not validate the contents against the expected digest, so it should only
+// be used to read from trusted sources!
+func copyTrustedImageBlobToTarStream(ctx context.Context, imgSrc types.ImageSource, digest digest.Digest, target *tar.Writer, filename string) error {
+	src, _, err := imgSrc.GetBlob(ctx, types.BlobInfo{Digest: digest}, nil)
+	if err != nil {
+		return fmt.Errorf("failed to get artifact file: %w", err)
+	}
+	defer src.Close()
+
+	// Get io.Reader from src
+	f, ok := src.(*os.File)
+	if !ok {
+		return fmt.Errorf("failed to open blob: %w", err)
+	}
+	defer f.Close()
+
+	fi, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("failed to stat blob: %w", err)
+	}
+
+	header, err := tar.FileInfoHeader(fi, "")
+	if err != nil {
+		return fmt.Errorf("failed to create tar header for blob: %w", err)
+	}
+	header.Name = filepath.ToSlash(filename)
+
+	if err := target.WriteHeader(header); err != nil {
+		return fmt.Errorf("failed to write header to tar stream: %w", err)
+	}
+
+	// Start streaming file contents
+	if _, err := io.Copy(target, f); err != nil {
+		return fmt.Errorf("failed to stream tar data: %w", err)
+	}
+
+	return nil
 }
 
 // readIndex is currently unused but I want to keep this around until
@@ -633,17 +718,12 @@ func createEmptyStanza(path string) error {
 	return os.WriteFile(path, specV1.DescriptorEmptyJSON.Data, 0644)
 }
 
-func determineManifestType(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
+func determineManifestType(blob io.Reader) (string, error) {
 	// DetectContentType looks at the first 512 bytes
 	b := make([]byte, 512)
 	// Because DetectContentType will return a default value
 	// we don't sweat the error
-	n, err := f.Read(b)
+	n, err := blob.Read(b)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return "", err
 	}

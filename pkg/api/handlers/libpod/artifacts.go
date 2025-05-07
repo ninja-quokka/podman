@@ -1,20 +1,19 @@
 package libpod
 
 import (
+	"archive/tar"
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 
 	"github.com/containers/image/v5/types"
+	libartifact_types "github.com/containers/podman/v5/pkg/libartifact/types"
+
 	"github.com/containers/podman/v5/libpod"
 	"github.com/containers/podman/v5/pkg/api/handlers/utils"
-	"github.com/sirupsen/logrus"
 
 	domain_utils "github.com/containers/podman/v5/pkg/domain/utils"
 
-	"github.com/containers/podman/v5/pkg/api/handlers/compat"
 	api "github.com/containers/podman/v5/pkg/api/types"
 	"github.com/containers/podman/v5/pkg/auth"
 	"github.com/containers/podman/v5/pkg/domain/entities"
@@ -27,6 +26,9 @@ func InspectArtifact(w http.ResponseWriter, r *http.Request) {
 	name := utils.GetName(r)
 	imageEngine := abi.ImageEngine{Libpod: runtime}
 	report, err := imageEngine.ArtifactInspect(r.Context(), name, entities.ArtifactInspectOptions{})
+	if errors.Is(err, libartifact_types.ErrArtifactNotExist) {
+		utils.ArtifactNotFound(w, name, err)
+	}
 	if err != nil {
 		utils.InternalServerError(w, err)
 		return
@@ -49,7 +51,7 @@ func PullArtifact(w http.ResponseWriter, r *http.Request) {
 	runtime := r.Context().Value(api.RuntimeKey).(*libpod.Runtime)
 	decoder := r.Context().Value(api.DecoderKey).(*schema.Decoder)
 	query := struct {
-		Name       string `schema:"name"` // NOTE: I think Brent mentioned we want to be strict with this also should it be "reference"
+		Name       string `schema:"name"` // FIX: I think Brent mentioned we want to be strict with this also should it be "reference"
 		Quiet      bool   `schema:"quiet"`
 		Retry      uint   `schema:"retry"`
 		RetryDelay string `schema:"retrydelay"`
@@ -122,7 +124,7 @@ func AddArtifact(w http.ResponseWriter, r *http.Request) {
 	decoder := r.Context().Value(api.DecoderKey).(*schema.Decoder)
 	query := struct {
 		Name        string   `schema:"name, required"`
-		File        string `schema:"file, required"`
+		File        string   `schema:"file, required"`
 		Annotations []string `schema:"annotations"`
 		Type        string   `schema:"type"`
 		Append      bool     `schema:"append"`
@@ -152,48 +154,25 @@ func AddArtifact(w http.ResponseWriter, r *http.Request) {
 		ArtifactType: query.Type,
 	}
 
-	// Write file to temparay directory
-	// TODO: (Lewis) Avoid writing to disk by updating the AddArtifact and subsequent functions to accept an io.reader
-	// and pass the http r.body rather than a string of paths
-	tmpDir, err := os.MkdirTemp("", "artifactAdd")
-	if err != nil {
-		utils.Error(w, http.StatusInternalServerError, fmt.Errorf("failed to create tempdir: %w", err))
-		return
-	}
-	defer func() {
-		err := os.RemoveAll(tmpDir)
-		if err != nil {
-			logrus.Errorf("Failed to remove temporary directory: %v.", err)
-		}
-	}()
-
-    f, err := os.Create(filepath.Join(tmpDir,query.File))
-	if err != nil{
-		utils.Error(w, http.StatusInternalServerError, fmt.Errorf("failed to create temporary file: %w", err))
-		return
-	}
-
-	if err := compat.SaveFromBody(f, r); err != nil {
-		utils.Error(w, http.StatusInternalServerError, fmt.Errorf("failed to write temporary file: %w", err))
-		return
-	}
-
-	path := []string{f.Name()}
+	artifactBlobs := []libartifact_types.ArtifactBlob{{ // FIX: Should this be a pointer?
+		Blob:     r.Body,
+		Filename: query.File,
+	}}
 
 	imageEngine := abi.ImageEngine{Libpod: runtime}
-	artifacts, err := imageEngine.ArtifactAdd(r.Context(), query.Name, path, artifactAddOptions)
+	artifacts, err := imageEngine.ArtifactAdd(r.Context(), query.Name, artifactBlobs, artifactAddOptions)
 	if err != nil {
 		utils.InternalServerError(w, err)
 		return
 	}
-	utils.WriteResponse(w, http.StatusOK, artifacts)
+	utils.WriteResponse(w, http.StatusCreated, artifacts)
 }
 
 func PushArtifact(w http.ResponseWriter, r *http.Request) {
 	runtime := r.Context().Value(api.RuntimeKey).(*libpod.Runtime)
 	decoder := r.Context().Value(api.DecoderKey).(*schema.Decoder)
 	query := struct {
-		Quiet      bool   `schema:"quiet"` // NOTE: Does this make sense on API?
+		Quiet      bool   `schema:"quiet"` // FIX: Does this make sense on API?
 		Retry      uint   `schema:"retry"`
 		RetryDelay string `schema:"retrydelay"`
 		TLSVerify  bool   `schema:"tlsVerify"`
@@ -240,4 +219,32 @@ func PushArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	utils.WriteResponse(w, http.StatusOK, artifacts)
+}
+
+func ExtractArtifact(w http.ResponseWriter, r *http.Request) {
+	runtime := r.Context().Value(api.RuntimeKey).(*libpod.Runtime)
+	decoder := r.Context().Value(api.DecoderKey).(*schema.Decoder)
+	query := struct {
+		Digest string   `schema:"digest"`
+		Title  []string `schema:"title"`
+	}{}
+
+	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
+		utils.Error(w, http.StatusBadRequest, fmt.Errorf("failed to parse parameters for %s: %w", r.URL.String(), err))
+		return
+	}
+
+	name := utils.GetName(r)
+
+	imageEngine := abi.ImageEngine{Libpod: runtime}
+	tw := tar.NewWriter(w)
+	defer tw.Close()
+	var extractOpts entities.ArtifactExtractOptions
+
+	err := imageEngine.ArtifactExtractTarStream(r.Context(), name, tw, &extractOpts)
+	if err != nil {
+		utils.InternalServerError(w, err)
+		return
+	}
+	// utils.WriteResponse(w, http.StatusOK, artifacts)
 }

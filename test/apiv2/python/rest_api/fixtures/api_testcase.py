@@ -34,7 +34,8 @@ class APITestCase(unittest.TestCase):
         )
         if r.status_code != 200:
             raise subprocess.CalledProcessError(
-                r.status_code, f"podman images pull quay.io/libpod/alpine:latest {r.text}"
+                r.status_code,
+                f"podman images pull quay.io/libpod/alpine:latest {r.text}",
             )
 
     @classmethod

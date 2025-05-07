@@ -26,6 +26,11 @@ type ArtifactExtractOptions struct {
 	Digest string
 }
 
+type ArtifactBlob struct {
+	Blob     io.Reader
+	Filename string
+}
+
 type ArtifactInspectOptions struct {
 	Remote bool
 }

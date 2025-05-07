@@ -184,5 +184,34 @@ func (s *APIServer) registerArtifactHandlers(r *mux.Router) error {
 	// - application/json
 	// responses:
 	r.Handle(VersionedPath("/libpod/artifacts/{name}/push"), s.APIHandler(libpod.PushArtifact)).Methods(http.MethodPost)
+	// swagger:operation GET /libpod/artifacts/{name}/export ArtifactsExport
+	// ---
+	// tags:
+	//  - artifacts
+	// summary: Extract an OCI artifact to a local path
+	// description: Extract the blobs of an OCI artifact to a local file or directory
+	// parameters:
+	//  - in: path
+	//    name: name
+	//    type: string
+	//    required: true
+	//    description: The name or digest of artifact
+	//  - in: query
+	//    name: title
+	//    type: string
+	//    description: Only extract blob with the given title
+	//  - in: query
+	//    name: digest
+	//    type: string
+	//    description: Only extract blob with the given digest
+	// produces:
+	// - application/x-tar
+	// responses:
+	//   200:
+	//     description: no error
+	//     schema:
+	//      type: string
+	//      format: binary
+	r.Handle(VersionedPath("/libpod/artifacts/{name}/extract"), s.APIHandler(libpod.ExtractArtifact)).Methods(http.MethodGet)
 	return nil
 }
